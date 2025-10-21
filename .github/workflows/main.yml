@@ -1,0 +1,101 @@
+name: RDP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Konfigurasi RDP Inti
+        run: |
+          # Aktifkan Remote Desktop dan matikan Network Level Authentication jika perlu
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+                            -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                            -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                            -Name "SecurityLayer" -Value 0 -Force
+
+          # Hapus aturan Firewall lama agar tidak duplikasi
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          
+          # Izinkan koneksi masuk ke port 3389 untuk RDP
+          netsh advfirewall firewall add rule name="RDP-Tailscale" `
+            dir=in action=allow protocol=TCP localport=3389
+
+          # Restart service Remote Desktop agar konfigurasi aktif
+          Restart-Service -Name TermService -Force
+
+      - name: Buat User RDP "yanz" dengan Password "yanz123"
+        run: |
+          $username = "yanz"
+          $password = "yanz123"
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member $username
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
+          
+          echo "RDP_CREDS=User: $username | Password: $password" >> $env:GITHUB_ENV
+          
+          if (-not (Get-LocalUser -Name $username)) {
+              Write-Error "User gagal dibuat"
+              exit 1
+          }
+
+      - name: Instalasi Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+
+      - name: Hubungkan ke Tailscale
+        run: |
+          # Jalankan Tailscale dengan auth key dan hostname unik
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          
+          # Tunggu IP Tailscale muncul
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              $retries++
+          }
+          
+          if (-not $tsIP) {
+              Write-Error "IP Tailscale gagal didapatkan. Keluar."
+              exit 1
+          }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: Cek Aksesibilitas RDP
+        run: |
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          
+          # Tes koneksi ke port 3389 di IP Tailscale
+          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
+          if (-not $testResult.TcpTestSucceeded) {
+              Write-Error "Koneksi TCP ke port 3389 gagal"
+              exit 1
+          }
+          Write-Host "Koneksi TCP berhasil!"
+
+      - name: Jaga Koneksi Tetap Aktif
+        run: |
+          Write-Host "`n=== AKSES RDP ==="
+          Write-Host "Alamat: $env:TAILSCALE_IP"
+          Write-Host "Username: yanz"
+          Write-Host "Password: yanz123"
+          Write-Host "==================`n"
+          
+          # Menjaga runner tetap aktif
+          while ($true) {
+              Write-Host "[$(Get-Date)] RDP Aktif - Gunakan Ctrl+C untuk berhenti"
+              Start-Sleep -Seconds 300
+          }
