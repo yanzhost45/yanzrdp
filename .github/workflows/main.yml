@@ -29,10 +29,10 @@ jobs:
           # Restart service Remote Desktop agar konfigurasi aktif
           Restart-Service -Name TermService -Force
 
-      - name: Buat User RDP "yanz" dengan Password "yanzhosting1212"
+      - name: Buat User RDP "yanz" dengan Password "YanzH0sting!24"
         run: |
           $username = "yanz"
-          $password = "yanzhosting1212"
+          $password = "YanzH0sting!24"
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
           New-LocalUser -Name $username -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member $username
